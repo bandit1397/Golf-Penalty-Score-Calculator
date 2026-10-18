@@ -6,12 +6,29 @@ import { voiceSupported, listenOnce, speak } from './voice.js';
 const KEY = 'smart-golf-score/v1';
 const DEFAULT_PARS = [4, 4, 3, 5, 4, 4, 3, 5, 4, 4, 4, 3, 5, 4, 4, 3, 5, 4];
 
+const MAX_PLAYERS = 5;
+const emptyHoles = () => Array.from({ length: 18 }, () => ({ events: [] }));
+
+// 예전(1인용) 라운드 형식 {holes} → 여러 명 형식 {players:[{name, holes}], active}
+function migrateRound(r) {
+  if (!r || r.players) return r;
+  const { holes, ...rest } = r;
+  return { ...rest, players: [{ name: '나', holes: holes || emptyHoles() }], active: 0 };
+}
+
+function normalize(d) {
+  const db = { round: null, courses: [], history: [], prefs: {}, lastPlayers: [], ...d };
+  db.round = migrateRound(db.round);
+  db.history = db.history.map(migrateRound);
+  return db;
+}
+
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem(KEY));
-    if (d && typeof d === 'object') return { round: null, courses: [], history: [], prefs: {}, ...d };
+    if (d && typeof d === 'object') return normalize(d);
   } catch {}
-  return { round: null, courses: [], history: [], prefs: {} };
+  return normalize({});
 }
 let db = load();
 db.prefs = { vibrate: true, speak: false, voice: false, wake: true, big: false, theme: 'auto', ...db.prefs };
@@ -43,8 +60,21 @@ function toast(msg) {
 // ───────────── 라운드 계산 도우미 ─────────────
 const R = () => db.round;
 const curIdx = () => R().current;
-const curHole = () => R().holes[curIdx()];
-const holeRes = (i = curIdx()) => computeHole({ par: R().pars[i], events: R().holes[i].events }, { doubleParCap: R().doubleParCap });
+const P = () => R().players[R().active];
+const curHole = () => P().holes[curIdx()];
+const holeResOf = (round, p, i) => computeHole({ par: round.pars[i], events: round.players[p].holes[i].events }, { doubleParCap: round.doubleParCap });
+const holeRes = (i = curIdx()) => holeResOf(R(), R().active, i);
+// 엔진은 1인 기준이므로 플레이어마다 따로 계산한다
+const playerRound = (round, p) => computeRound({ pars: round.pars, holes: round.players[p].holes, doubleParCap: round.doubleParCap });
+const allHoled = (i = curIdx()) => R().players.every((_, p) => holeResOf(R(), p, i).holed);
+const nextPlayerToFinish = (i = curIdx()) => {
+  const n = R().players.length;
+  for (let k = 1; k < n; k++) {
+    const p = (R().active + k) % n;
+    if (!holeResOf(R(), p, i).holed) return p;
+  }
+  return null;
+};
 const ctxFor = (i = curIdx()) => ({ local: R().local, casual: R().casual, provisionalActive: !!holeRes(i).provisional, par: R().pars[i] });
 
 function addEvent(ev) {
@@ -64,8 +94,9 @@ function addEvent(ev) {
 
 function announceHoleDone(r) {
   const name = scoreName(r.total, r.par);
-  toast(`${curIdx() + 1}번 홀 ${r.total}타 · ${name}`);
-  if (db.prefs.speak) speak(`${r.total}타, ${name}`);
+  const who = R().players.length > 1 ? `${P().name} ` : '';
+  toast(`${who}${curIdx() + 1}번 홀 ${r.total}타 · ${name}`);
+  if (db.prefs.speak) speak(`${who}${r.total}타, ${name}`);
 }
 
 function undo() {
@@ -89,7 +120,7 @@ function goHole(i) {
 function nextUnplayed(from) {
   for (let k = 1; k <= 18; k++) {
     const i = (from + k) % 18;
-    if (!holeRes(i).holed) return i;
+    if (!allHoled(i)) return i;
   }
   return null;
 }
@@ -116,7 +147,7 @@ function viewStart() {
     <h1>스마트 골프 스코어</h1>
     <p>샷마다 버튼 한 번. OB·해저드·잠정구·언플레이어블은 질문에 답하면<br>벌타와 <b>다음 몇 타째인지</b>, <b>어디서 칠지</b> 알려 드립니다.</p>
     <button class="btn primary xl" data-act="newRound">라운드 시작</button>
-    ${last ? `<p class="muted small">최근 라운드: ${esc(last.courseName)} ${esc(last.date)} · ${last.total}타 (${fmtToPar(last.toPar)})</p>` : ''}
+    ${last ? `<p class="muted small">최근 라운드: ${esc(last.courseName)} ${esc(last.date)} · ${last.players.map((pl, p) => `${esc(pl.name)} ${playerRound(last, p).all.total}타`).join(', ')}</p>` : ''}
   </section>
   <section class="card">
     <h3>계산 원칙</h3>
@@ -134,8 +165,10 @@ function viewPlay() {
   if (!R()) return viewStart();
   const i = curIdx();
   const r = holeRes(i);
-  const all = computeRound(R());
+  const all = playerRound(R(), R().active);
   const par = R().pars[i];
+  const multi = R().players.length > 1;
+  const nextP = nextPlayerToFinish(i);
   const quick = [
     ['ob', 'OB'],
     ['pa', '해저드'],
@@ -158,7 +191,13 @@ function viewPlay() {
         <button class="btn" data-act="undo">↶ 되돌리기</button>
         <button class="btn" data-act="manual">✎ 타수 수정</button>
       </div>
-      ${i < 17 || nextUnplayed(i) != null ? `<button class="btn primary xl" data-act="nextHole">다음 홀 ▶</button>` : `<button class="btn primary xl" data-act="tab" data-tab="card">스코어카드 보기</button>`}`;
+      ${
+        nextP != null
+          ? `<button class="btn primary xl" data-act="player" data-p="${nextP}">${esc(R().players[nextP].name)} 기록하기 ▶</button>`
+          : i < 17 || nextUnplayed(i) != null
+            ? `<button class="btn primary xl" data-act="nextHole">다음 홀 ▶</button>`
+            : `<button class="btn primary xl" data-act="tab" data-tab="card">스코어카드 보기</button>`
+      }`;
   } else {
     const pv = r.provisional;
     center = `
@@ -201,7 +240,7 @@ function viewPlay() {
   <header class="top">
     <div class="course">${esc(R().courseName)} ${modeBadge(all.mode)}</div>
     <div class="sum">
-      <div><span>총 타수</span><b>${all.all.total}</b></div>
+      <div><span>${multi ? `${esc(P().name)} 총 타수` : '총 타수'}</span><b>${all.all.total}</b></div>
       <div><span>파 대비</span><b class="${all.all.toPar > 0 ? 'over' : all.all.toPar < 0 ? 'under' : ''}">${fmtToPar(all.all.done ? all.all.toPar : null)}</b></div>
       <div><span>완료</span><b>${all.all.done}/18</b></div>
     </div>
@@ -215,6 +254,7 @@ function viewPlay() {
     <button class="nav" data-act="next" ${i === 17 ? 'disabled' : ''} aria-label="다음 홀">▶</button>
     ${db.prefs.voice && voiceSupported ? `<button class="mic" data-act="mic" aria-label="음성 명령">🎤</button>` : ''}
   </section>
+  ${multi ? viewPlayers(i) : ''}
   ${r.warnings.map((w) => `<div class="warnbox">⚠ ${esc(w)}</div>`).join('')}
   ${center}
   ${viewLog(r)}
@@ -222,6 +262,21 @@ function viewPlay() {
 }
 
 const clampDiff = (d) => (d == null ? 'x' : Math.max(-2, Math.min(3, d)));
+
+// 동반자 전환 띠: 이름 · 이 홀 상태 · 라운드 파 대비
+function viewPlayers(i) {
+  const chips = R()
+    .players.map((pl, p) => {
+      const h = holeResOf(R(), p, i);
+      const tot = playerRound(R(), p).all;
+      const now = h.holed ? `<b class="s${clampDiff(h.toPar)}">${h.total}타</b>` : h.started ? `<b>${h.provisional ? h.provisional.next : h.next}타째</b>` : '<b>–</b>';
+      return `<button class="pchip ${p === R().active ? 'on' : ''} ${h.holed ? 'done' : ''}" data-act="player" data-p="${p}">
+        <span class="pn">${esc(pl.name)}</span>${now}<em>${tot.done ? fmtToPar(tot.toPar) : 'E'}</em></button>`;
+    })
+    .join('');
+  return `<section class="players">${chips}</section>
+    <button class="btn ghost small wide" data-act="group">👥 전원 타수 한 번에 입력</button>`;
+}
 
 function viewLog(r) {
   if (!r.log.length) return `<section class="log empty">첫 샷을 기록해 보세요. 문제가 생기면 <b>⚠ 상황 발생</b>을 누르세요.</section>`;
@@ -277,18 +332,78 @@ function stats(res) {
     <div><b>${c.bogey}</b><span>보기</span></div><div><b>${c.double}</b><span>더블↑</span></div></div>`;
 }
 
+// 동반자 전체 스코어카드 (한 줄에 한 사람)
+function groupTable(round, from, live = false) {
+  const idx = Array.from({ length: 9 }, (_, k) => from + k);
+  const parSum = idx.reduce((a, i) => a + round.pars[i], 0);
+  const rows = round.players
+    .map((pl, p) => {
+      const res = playerRound(round, p);
+      const part = from === 0 ? res.front : res.back;
+      const cells = idx
+        .map((i) => {
+          const h = res.holes[i];
+          const v = h.holed ? `<span class="sc s${clampDiff(h.toPar)}">${h.total}</span>` : h.started ? '…' : '';
+          return live ? `<td data-act="go" data-i="${i}" data-p="${p}">${v}</td>` : `<td>${v}</td>`;
+        })
+        .join('');
+      return `<tr class="scorerow"><td class="nm">${esc(pl.name)}</td>${cells}<td><b>${part.done ? part.total : ''}</b></td></tr>`;
+    })
+    .join('');
+  return `<div class="tablewrap"><table class="sctable group">
+    <tr><th>홀</th>${idx.map((i) => `<th>${i + 1}</th>`).join('')}<th>${from ? 'IN' : 'OUT'}</th></tr>
+    <tr class="parrow"><td>파</td>${idx.map((i) => `<td>${round.pars[i]}</td>`).join('')}<td>${parSum}</td></tr>
+    ${rows}</table></div>`;
+}
+
+// 순위: 마친 홀 기준 파 대비가 낮은 순 (동점은 같은 순위)
+function leaderboard(round) {
+  const list = round.players.map((pl, p) => ({ p, name: pl.name, ...playerRound(round, p).all }));
+  const sorted = [...list].sort((a, b) => (a.done ? a.toPar : 999) - (b.done ? b.toPar : 999) || a.total - b.total);
+  let rank = 0;
+  let prev = null;
+  return `<ol class="board">${sorted
+    .map((x, k) => {
+      const key = x.done ? x.toPar : null;
+      if (key !== prev) rank = k + 1;
+      prev = key;
+      return `<li><span class="rk">${x.done ? rank : '-'}</span><span class="grow"><b>${esc(x.name)}</b><small>${x.done}/18홀 · 벌타 ${x.penalties} · 퍼트 ${x.putts}</small></span><b class="tt">${x.total}</b><span class="tp">${fmtToPar(x.done ? x.toPar : null)}</span></li>`;
+    })
+    .join('')}</ol>`;
+}
+
+function roundCard(round, live) {
+  const multi = round.players.length > 1;
+  const sel = live ? Math.min(ui.cardPlayer ?? round.active, round.players.length - 1) : 0;
+  const mode = round.players.reduce((m, _, p) => {
+    const x = playerRound(round, p).mode;
+    return ['official', 'local', 'casual'].indexOf(x) > ['official', 'local', 'casual'].indexOf(m) ? x : m;
+  }, 'official');
+  const res = playerRound(round, sel);
+  let html = `<div class="cardhead"><h2>${esc(round.courseName)}</h2>${modeBadge(mode)}</div>
+    <div class="muted small">${esc(round.date)} · ${round.casual ? '친선 라운드' : '공식 규칙'}${round.doubleParCap ? ' · 더블파 상한' : ''}${multi ? ` · ${round.players.length}명` : ''}</div>`;
+  if (multi) {
+    html += `<h3>순위</h3>${leaderboard(round)}${groupTable(round, 0, live)}${groupTable(round, 9, live)}`;
+  }
+  if (multi && live) {
+    html += `<h3>개인 상세</h3><div class="seg wrap">${round.players
+        .map((pl, p) => `<button class="${p === sel ? 'on' : ''}" data-act="cardPlayer" data-p="${p}">${esc(pl.name)}</button>`)
+        .join('')}</div>`;
+  }
+  if (live || !multi) {
+    html += `<div class="total"><b>${res.all.total}</b>타 <span>${fmtToPar(res.all.done ? res.all.toPar : null)}</span> <small>(${res.all.done}/18홀)</small></div>
+      ${cardTable(round, res, 0, live && !multi)}${cardTable(round, res, 9, live && !multi)}
+      ${stats(res)}
+      <div class="muted small">벌타 합계 ${res.all.penalties} · 퍼트 합계 ${res.all.putts}</div>`;
+  }
+  return html;
+}
+
 function viewCard() {
   let html = '';
   if (R()) {
-    const res = computeRound(R());
-    html += `<section class="card">
-      <div class="cardhead"><h2>${esc(R().courseName)}</h2>${modeBadge(res.mode)}</div>
-      <div class="muted small">${esc(R().date)} · ${R().casual ? '친선 라운드' : '공식 규칙'}${R().doubleParCap ? ' · 더블파 상한' : ''}</div>
-      <div class="total"><b>${res.all.total}</b>타 <span class="${res.all.toPar > 0 ? 'over' : 'under'}">${fmtToPar(res.all.done ? res.all.toPar : null)}</span> <small>(${res.all.done}/18홀)</small></div>
-      ${cardTable(R(), res, 0, true)}${cardTable(R(), res, 9, true)}
-      ${stats(res)}
-      <div class="muted small">벌타 합계 ${res.all.penalties} · 퍼트 합계 ${res.all.putts}</div>
-      <p class="muted small">점수를 누르면 그 홀로 이동합니다. ${res.mode !== 'official' ? '로컬룰·친선 처리가 포함된 홀이 있어 공식 기록과 다를 수 있습니다.' : ''}</p>
+    html += `<section class="card">${roundCard(R(), true)}
+      <p class="muted small">점수를 누르면 그 홀(그 사람)로 이동합니다. 로컬룰·친선 처리가 포함되면 공식 기록과 다를 수 있습니다.</p>
       <div class="row"><button class="btn" data-act="share">📤 결과 공유</button>
       <button class="btn ${ui.armed === 'finish' ? 'danger' : 'primary'}" data-act="finish">${ui.armed === 'finish' ? '한 번 더 누르면 종료' : '라운드 종료·저장'}</button></div>
     </section>`;
@@ -300,9 +415,12 @@ function viewCard() {
       ? `<ul class="hist">${db.history
           .map((h) => {
             const open = ui.histOpen === h.id;
-            const res = open ? computeRound(h) : null;
-            return `<li><button class="histrow" data-act="hist" data-id="${h.id}"><span>${esc(h.date)}</span><span class="grow">${esc(h.courseName)}</span><b>${h.total}</b><span>${fmtToPar(h.toPar)}</span></button>
-              ${open ? `${cardTable(h, res, 0)}${cardTable(h, res, 9)}<button class="btn small ${ui.armed === 'del' + h.id ? 'danger' : 'ghost'}" data-act="delHist" data-id="${h.id}">${ui.armed === 'del' + h.id ? '한 번 더 누르면 삭제' : '삭제'}</button>` : ''}</li>`;
+            const who = h.players.map((pl, p) => {
+              const t = playerRound(h, p).all;
+              return `${esc(pl.name)} <b>${t.total}</b>`;
+            });
+            return `<li><button class="histrow" data-act="hist" data-id="${h.id}"><span>${esc(h.date)}</span><span class="grow">${esc(h.courseName)}<small class="muted"><br>${who.join(' · ')}</small></span></button>
+              ${open ? `${roundCard(h, false)}<button class="btn small ${ui.armed === 'del' + h.id ? 'danger' : 'ghost'}" data-act="delHist" data-id="${h.id}">${ui.armed === 'del' + h.id ? '한 번 더 누르면 삭제' : '삭제'}</button>` : ''}</li>`;
           })
           .join('')}</ul>`
       : '<p class="muted">저장된 라운드가 없습니다.</p>'
@@ -359,6 +477,8 @@ function viewSettings() {
     html += `<section class="card">
       <h2>현재 라운드</h2>
       <label class="field"><span>골프장 이름</span><input type="text" value="${esc(R().courseName)}" data-input="courseName"></label>
+      <div class="field"><span>플레이어</span>${playersEditor(R().players.map((p) => p.name), 'r')}
+      <p class="muted small">이름은 바로 저장됩니다. 플레이어를 삭제하면 그 사람의 이번 라운드 기록도 지워집니다.</p></div>
       <div class="seg">
         <button class="${R().casual ? '' : 'on'}" data-act="setCasual" data-v="0">공식 규칙</button>
         <button class="${R().casual ? 'on' : ''}" data-act="setCasual" data-v="1">친선 라운드</button>
@@ -432,7 +552,7 @@ function renderSheet() {
   }
   $sheet.hidden = false;
   document.body.classList.add('locked');
-  const body = { wizard: sheetWizard, manual: sheetManual, newRound: sheetNewRound }[s.kind]();
+  const body = { wizard: sheetWizard, manual: sheetManual, newRound: sheetNewRound, group: sheetGroup }[s.kind]();
   $sheet.innerHTML = `<div class="sheet-bg" data-act="closeSheet"></div><div class="sheet-panel" role="dialog" aria-modal="true">${body}</div>`;
 }
 
@@ -588,6 +708,7 @@ function sheetNewRound() {
   return `${sheetHead('새 라운드', false)}
     ${db.courses.length ? `<label class="field"><span>저장된 골프장</span><select data-input="pickCourse"><option value="">— 새 골프장 —</option>${db.courses.map((c, i) => `<option value="${i}" ${s.courseIdx === i ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>` : ''}
     <label class="field"><span>골프장 이름</span><input type="text" value="${esc(s.name)}" placeholder="예: OO컨트리클럽" data-input="nrName"></label>
+    <div class="field"><span>플레이어 (최대 ${MAX_PLAYERS}명)</span>${playersEditor(s.players, 'nr')}</div>
     <div class="field"><span>규칙 모드</span><div class="seg">
       <button class="${s.casual ? '' : 'on'}" data-act="nrCasual" data-v="0">공식 규칙</button>
       <button class="${s.casual ? 'on' : ''}" data-act="nrCasual" data-v="1">친선 라운드</button></div></div>
@@ -602,10 +723,39 @@ function sheetNewRound() {
     <button class="btn primary xl" data-act="nrGo">시작하기</button>`;
 }
 
+// 이름 목록 편집 (prefix: nr = 새 라운드, r = 진행 중 라운드)
+function playersEditor(names, prefix) {
+  return `<div class="plist">${names
+    .map(
+      (n, i) => `<div class="prow"><span class="pno">${i + 1}</span><input type="text" value="${esc(n)}" placeholder="${i ? `동반자 ${i}` : '나'}" maxlength="10" data-input="${prefix}PName" data-i="${i}">
+      ${names.length > 1 ? `<button class="iconbtn" data-act="${prefix}PDel" data-i="${i}" aria-label="삭제">${prefix === 'r' && ui.armed === 'pdel' + i ? '확인' : '✕'}</button>` : ''}</div>`
+    )
+    .join('')}</div>
+    ${names.length < MAX_PLAYERS ? `<button class="btn ghost small wide" data-act="${prefix}PAdd">＋ 동반자 추가</button>` : ''}`;
+}
+
+// 한 홀을 마친 뒤 전원의 타수를 한 화면에서 입력
+function sheetGroup() {
+  const i = curIdx();
+  const par = R().pars[i];
+  return `${sheetHead(`${i + 1}번 홀 · PAR ${par} 전원 입력`, false)}
+    <p class="muted small">각자 최종 타수(벌타 포함)를 맞추고 저장하세요. 샷별로 기록 중이던 사람도 이 값으로 확정됩니다. 바꾸지 않은 완료 기록은 그대로 둡니다.</p>
+    <div class="glist">${ui.sheet.values
+      .map(
+        (v, p) => `<div class="grow-row"><div class="gname"><b>${esc(R().players[p].name)}</b><small class="s${clampDiff(v - par)}">${scoreName(v, par)}</small></div>
+        <div class="stepper inline"><button data-act="gD" data-p="${p}" data-d="-1">−</button><b>${v}</b><button data-act="gD" data-p="${p}" data-d="1">+</button></div></div>`
+      )
+      .join('')}</div>
+    <button class="btn primary xl" data-act="gSave">저장</button>`;
+}
+
 // ───────────── 동작 ─────────────
 function newRoundDraft() {
-  return { kind: 'newRound', courseIdx: null, name: '', casual: false, start: 0, pars: [...DEFAULT_PARS], local: { ...DEFAULT_LOCAL } };
+  const players = db.lastPlayers?.length ? [...db.lastPlayers] : ['나'];
+  return { kind: 'newRound', courseIdx: null, name: '', casual: false, start: 0, pars: [...DEFAULT_PARS], local: { ...DEFAULT_LOCAL }, players };
 }
+
+const cleanNames = (names) => names.map((n, i) => n.trim() || (i ? `동반자 ${i}` : '나'));
 
 function startRound(s) {
   const d = new Date();
@@ -617,9 +767,12 @@ function startRound(s) {
     doubleParCap: false,
     pars: [...s.pars],
     local: { ...s.local },
-    holes: Array.from({ length: 18 }, () => ({ events: [] })),
+    players: cleanNames(s.players).map((name) => ({ name, holes: emptyHoles() })),
+    active: 0,
     current: s.start,
   };
+  db.lastPlayers = R().players.map((p) => p.name);
+  ui.cardPlayer = null;
   save();
   closeSheet();
   ui.tab = 'play';
@@ -628,21 +781,24 @@ function startRound(s) {
 }
 
 function finishRound() {
-  const res = computeRound(R());
-  db.history.unshift({ ...R(), total: res.all.total, toPar: res.all.toPar, holesDone: res.all.done });
+  db.history.unshift({ ...R() });
   db.round = null;
   save();
   toast('라운드를 저장했습니다.');
 }
 
 async function shareRound() {
-  const res = computeRound(R());
-  const line = (from) =>
+  const line = (res, from) =>
     res.holes
       .slice(from, from + 9)
       .map((h) => (h.holed ? h.total : '-'))
       .join(' ');
-  const text = `⛳ ${R().courseName} ${R().date}\n총 ${res.all.total}타 (${fmtToPar(res.all.toPar)}) · ${res.all.done}/18홀\nOUT ${line(0)} = ${res.front.total}\nIN  ${line(9)} = ${res.back.total}\n벌타 ${res.all.penalties} · 퍼트 ${res.all.putts}${res.mode !== 'official' ? `\n(${MODE_LABEL[res.mode]})` : ''}`;
+  const blocks = R().players.map((pl, p) => {
+    const res = playerRound(R(), p);
+    const mode = res.mode !== 'official' ? ` · ${MODE_LABEL[res.mode]}` : '';
+    return `[${pl.name}] ${res.all.total}타 (${fmtToPar(res.all.done ? res.all.toPar : null)}) · ${res.all.done}/18홀${mode}\nOUT ${line(res, 0)} = ${res.front.total}\nIN  ${line(res, 9)} = ${res.back.total}\n벌타 ${res.all.penalties} · 퍼트 ${res.all.putts}`;
+  });
+  const text = `⛳ ${R().courseName} ${R().date}\n\n${blocks.join('\n\n')}`;
   try {
     if (navigator.share) await navigator.share({ text });
     else {
@@ -665,7 +821,7 @@ async function importData(file) {
   try {
     const d = JSON.parse(await file.text());
     if (!d || !Array.isArray(d.history)) throw new Error();
-    db = { round: null, courses: [], history: [], prefs: db.prefs, ...d };
+    db = normalize({ ...d, prefs: db.prefs });
     save();
     toast('백업을 불러왔습니다.');
     render();
@@ -725,7 +881,7 @@ function runVoice(text, cmd) {
       addEvent(resolveEvent(cmd.keep));
       break;
     case 'readout': {
-      const all = computeRound(R());
+      const all = playerRound(R(), R().active);
       speak(`${curIdx() + 1}번 홀 다음 ${r.provisional ? r.provisional.next : r.next}타째. 총 ${all.all.total}타, ${all.all.toPar === 0 ? '이븐' : fmtToPar(all.all.toPar)}`);
       break;
     }
@@ -797,7 +953,67 @@ document.addEventListener('click', (e) => {
       return goHole(curIdx() + 1);
     case 'go':
       ui.tab = 'play';
+      if (el.dataset.p != null) R().active = +el.dataset.p;
       return goHole(+el.dataset.i);
+    case 'player':
+      R().active = +el.dataset.p;
+      save();
+      buzz();
+      break;
+    case 'cardPlayer':
+      ui.cardPlayer = +el.dataset.p;
+      break;
+    case 'group': {
+      const i = curIdx();
+      const values = R().players.map((_, p) => {
+        const h = holeResOf(R(), p, i);
+        return h.holed ? h.total : R().pars[i];
+      });
+      openSheet({ kind: 'group', values, initial: [...values] });
+      return;
+    }
+    case 'gD': {
+      const p = +el.dataset.p;
+      ui.sheet.values[p] = Math.max(1, Math.min(30, ui.sheet.values[p] + +el.dataset.d));
+      return renderSheet();
+    }
+    case 'gSave': {
+      const i = curIdx();
+      const { values, initial } = ui.sheet;
+      R().players.forEach((pl, p) => {
+        const h = holeResOf(R(), p, i);
+        if (h.holed && values[p] === initial[p]) return;
+        pl.holes[i].events.push({ type: 'set_total', value: values[p], label: `전원 입력 ${values[p]}타`, t: Date.now() });
+      });
+      save();
+      buzz();
+      closeSheet();
+      toast(`${i + 1}번 홀 전원 기록 완료`);
+      break;
+    }
+    case 'nrPAdd':
+      if (ui.sheet.players.length < MAX_PLAYERS) ui.sheet.players.push('');
+      return renderSheet();
+    case 'nrPDel':
+      ui.sheet.players.splice(+el.dataset.i, 1);
+      return renderSheet();
+    case 'rPAdd':
+      if (R().players.length < MAX_PLAYERS) {
+        R().players.push({ name: `동반자 ${R().players.length}`, holes: emptyHoles() });
+        save();
+      }
+      break;
+    case 'rPDel': {
+      const k = +el.dataset.i;
+      arm('pdel' + k, () => {
+        R().players.splice(k, 1);
+        R().active = Math.min(R().active, R().players.length - 1);
+        ui.cardPlayer = null;
+        save();
+        toast('플레이어를 삭제했습니다.');
+      });
+      break;
+    }
     case 'nextHole': {
       const n = curIdx() < 17 && !holeRes(curIdx() + 1).holed ? curIdx() + 1 : nextUnplayed(curIdx());
       if (n == null) ui.tab = 'card';
@@ -988,6 +1204,13 @@ document.addEventListener('input', (e) => {
     R().courseName = e.target.value;
     save();
   } else if (k === 'nrName') ui.sheet.name = e.target.value;
+  else if (k === 'nrPName') ui.sheet.players[+e.target.dataset.i] = e.target.value;
+  else if (k === 'rPName') {
+    const i = +e.target.dataset.i;
+    R().players[i].name = e.target.value.trim() || (i ? `동반자 ${i}` : '나');
+    db.lastPlayers = R().players.map((p) => p.name);
+    save();
+  }
   else if (k === 'ruleQuery') {
     ui.ruleQuery = e.target.value;
     const pos = e.target.selectionStart;

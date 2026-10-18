@@ -1,6 +1,6 @@
 // 오프라인 캐시: 골프장에서 통신이 끊겨도 앱이 열리고 계산되도록 한다.
 // 파일을 바꾸면 VERSION을 올려서 새 캐시를 받게 한다.
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.1.0';
 const CACHE = `smart-golf-${VERSION}`;
 const FILES = [
   './',

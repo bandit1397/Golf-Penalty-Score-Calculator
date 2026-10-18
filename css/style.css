@@ -277,3 +277,37 @@ button { font: inherit; color: inherit; }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
 }
 [hidden] { display: none !important; }
+
+/* 동반자 */
+.players { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 6px; }
+.pchip {
+  flex: 1 0 auto; min-width: 72px; min-height: 64px; border-radius: 14px; border: 1.5px solid var(--line); background: var(--card);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 8px; cursor: pointer;
+}
+.pchip .pn { font-weight: 800; font-size: .85em; max-width: 6.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pchip b { font-size: 1.05em; }
+.pchip em { font-style: normal; font-size: .72em; color: var(--muted); }
+.pchip.on { border-color: var(--green); background: var(--green); color: #fff; }
+.pchip.on em, .pchip.on b { color: #fff; }
+.pchip.done:not(.on) { background: var(--green-soft); }
+.btn.wide { width: 100%; margin: 2px 0 6px; }
+.plist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.prow { display: flex; align-items: center; gap: 8px; }
+.prow input { flex: 1; min-width: 0; }
+.pno { width: 26px; height: 26px; border-radius: 50%; background: var(--green-soft); color: var(--green); font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: .85em; flex: none; }
+.glist { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.grow-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--card); border-radius: 14px; padding: 8px 10px; border: 1px solid var(--line); }
+.gname { display: flex; flex-direction: column; min-width: 0; }
+.gname b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepper.inline { margin: 0; flex-wrap: nowrap; flex: none; }
+.stepper.inline b { min-width: 44px; font-size: 1.6em; }
+.board { list-style: none; padding: 0; margin: 0 0 8px; }
+.board li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.board .rk { width: 30px; height: 30px; border-radius: 50%; background: var(--green); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; flex: none; }
+.board .grow { display: flex; flex-direction: column; min-width: 0; }
+.board small { color: var(--muted); font-size: .78em; }
+.board .tt { font-size: 1.4em; }
+.board .tp { min-width: 36px; text-align: right; font-weight: 700; }
+.seg.wrap button { min-width: 0; padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sctable.group td.nm { max-width: 60px; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.sctable.group th:first-child { width: 60px; }
