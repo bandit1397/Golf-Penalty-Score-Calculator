@@ -1,0 +1,17 @@
+{
+  "name": "스마트 골프 스코어",
+  "short_name": "골프스코어",
+  "description": "골프 규칙과 골프장 로컬룰에 따라 벌타·타수를 자동 계산",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f6b3f",
+  "theme_color": "#0f5132",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

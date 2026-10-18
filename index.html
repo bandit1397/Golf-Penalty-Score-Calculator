@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>스마트 골프 스코어</title>
+  <meta name="description" content="골프 규칙(R&A)과 골프장 로컬룰에 따라 벌타와 타수를 자동 계산하는 모바일 스코어 앱">
+  <meta name="theme-color" content="#0f5132">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="골프스코어">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="app" aria-live="polite"></main>
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="play"><span>⛳</span>플레이</button>
+    <button data-tab="card"><span>📋</span>스코어카드</button>
+    <button data-tab="rules"><span>📖</span>규칙 안내</button>
+    <button data-tab="settings"><span>⚙️</span>설정</button>
+  </nav>
+  <noscript>이 앱은 자바스크립트가 필요합니다.</noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
